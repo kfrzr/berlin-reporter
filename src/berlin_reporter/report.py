@@ -53,7 +53,7 @@ class Draft:
     obstruction: str | None
     operator: str | None
     warnings: list[str] = field(default_factory=list)
-    status: str = "draft"  # draft | sent | dry_run | handed_off
+    status: str = "draft"  # draft | dry_run | form_pending | sent
 
     def save(self, settings: Settings) -> Path:
         path = settings.drafts / f"{self.id}.json"
@@ -258,7 +258,7 @@ def render(draft: Draft, settings: Settings) -> dict:
     }
 
 
-def append_history(settings: Settings, draft: Draft, result: str) -> None:
+def append_history(settings: Settings, draft: Draft, result: str, **extra) -> None:
     entry = {
         "draft_id": draft.id,
         "logged_at": datetime.now().isoformat(timespec="seconds"),
@@ -268,6 +268,7 @@ def append_history(settings: Settings, draft: Draft, result: str) -> None:
         "violation": draft.violation,
         "time_start": draft.time_start,
         "address": draft.address,
+        **{k: v for k, v in extra.items() if v},
     }
     with settings.history_file.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")

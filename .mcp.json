@@ -3,6 +3,10 @@
     "berlin-reporter": {
       "command": "uv",
       "args": ["run", "--directory", "${CLAUDE_PROJECT_DIR:-.}", "berlin-reporter"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
     }
   }
 }

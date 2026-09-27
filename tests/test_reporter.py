@@ -20,6 +20,7 @@ def settings(tmp_path, monkeypatch):
         "REPORTER_EMAIL": "erika@example.com",
         "DRY_RUN": "1",
         "GEOCODE": "0",
+        "UPLOAD_DIR": str(tmp_path / "uploads"),
     }
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -120,3 +121,42 @@ def test_warnings_and_duplicates(settings, photo):
 @pytest.mark.parametrize("plate", ["B-AB 1234", "B AB 1234", "M-X 1E", "LDS-K 42", "123 ABC", "LÖ-AB 12"])
 def test_plate_formats(plate):
     assert report.plate_looks_valid(report.normalize_plate(plate))
+
+
+from berlin_reporter import webform
+
+
+@pytest.mark.parametrize("address,expected", [
+    ("Oranienstraße 10a, 10999 Berlin", ("Oranienstraße", "10a", "10999", "Berlin")),
+    ("Karl-Marx-Allee 34-36, 10178 Berlin", ("Karl-Marx-Allee", "34-36", "10178", "Berlin")),
+    ("Straße des 17. Juni 135, 10623 Berlin", ("Straße des 17. Juni", "135", "10623", "Berlin")),
+    ("Kottbusser Tor", ("Kottbusser Tor", None, None, None)),
+])
+def test_split_address(address, expected):
+    a = webform.split_address(address)
+    assert (a["street"], a["house_number"], a["postcode"], a["city"]) == expected
+
+
+def test_web_payload(settings, photo):
+    draft = report.create_draft(
+        settings, photos=[str(photo)], plate="B-RL 42", vehicle_type="car", violation="rotlicht",
+        time_start="2026-09-20T08:31", address="Frankfurter Allee 1, 10247 Berlin", district="Friedrichshain-Kreuzberg",
+    )
+    payload = webform.form_payload(draft, settings)
+    assert payload["start_url"].startswith("https://www.internetwache-polizei-berlin.de")
+    assert payload["reporter"]["first_name"] == "Erika" and payload["reporter"]["last_name"] == "Mustermann"
+    assert payload["reporter"]["address_postcode"] == "10115"
+    assert payload["incident"]["date"] == "20.09.2026" and payload["incident"]["time_from"] == "08:31"
+    assert "B-RL 42" in payload["description_de"] and "Rotlichts" in payload["description_de"]
+    assert len(payload["upload_files"]) == 1 and Path(payload["upload_files"][0]).is_file()
+    assert Path(payload["upload_files"][0]).is_relative_to(settings.upload_dir)
+
+
+def test_keychain_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ENV_FILE_LOCATIONS", [])
+    monkeypatch.setenv("REPORTS_DIR", str(tmp_path))
+    monkeypatch.delenv("REPORTER_NAME", raising=False)
+    monkeypatch.setattr(config, "keyring_get", lambda k: {"REPORTER_NAME": "Aus Keychain"}.get(k, ""))
+    assert config.load_settings().reporter_name == "Aus Keychain"
+    monkeypatch.setenv("REPORTER_NAME", "Aus Env")
+    assert config.load_settings().reporter_name == "Aus Env"

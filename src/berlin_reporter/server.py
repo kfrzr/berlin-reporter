@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -12,14 +13,17 @@ from .config import load_settings
 from .mailer import build_message, deliver
 from .report import Draft, ReportError, append_history, create_draft, read_history, render
 from .violations import ROUTES, catalog
+from .webform import form_payload
 
 mcp = FastMCP(
     "berlin-reporter",
     instructions=(
         "Drafts and submits reports of traffic and parking violations in Berlin. Workflow: "
         "inspect_photo → draft_report → show the draft to the user → submit_report only after "
-        "the user explicitly confirms. Never guess a license plate: if it is not clearly legible "
-        "in the photo, ask the user."
+        "the user explicitly confirms. Email routes are sent by submit_report itself; web-form "
+        "routes return a payload to fill in with the Playwright browser tools, followed by "
+        "mark_web_submitted. Never guess a license plate: if it is not clearly legible in the "
+        "photo, ask the user. Never try to solve or bypass a CAPTCHA; the user does that."
     ),
 )
 
@@ -38,7 +42,9 @@ def setup_status() -> str:
         "dry_run": s.dry_run,
         "reports_dir": str(s.reports_dir),
         "inbox": str(s.inbox),
-        "hint": "Fill in .env (see .env.example). DRY_RUN=1 saves .eml files to the outbox instead of sending.",
+        "upload_dir": str(s.upload_dir),
+        "hint": "Store personal data with `uv run berlin-reporter-secrets set` (OS keychain) or in .env. "
+                "DRY_RUN=1 saves .eml files to the outbox instead of sending.",
     })
 
 
@@ -143,9 +149,15 @@ def draft_report(
 def submit_report(draft_id: str, user_confirmed: bool) -> str:
     """Submit a draft to the authority. Only call after showing the draft and getting an explicit yes.
 
-    Email routes (parking violations → Bußgeldstelle) are sent by SMTP with the photos attached and
-    the user in CC. Web-form routes (moving violations → Internetwache; rental scooters → operator)
-    cannot be sent automatically: this returns the text and link for the user to submit, and logs it.
+    Email routes (parking violations → Bußgeldstelle) are sent right here by SMTP with the photos
+    attached and the user in CC.
+
+    Web-form routes (moving violations → Polizei Internetwache; rental scooters → operator) return
+    status "form_pending" and a payload: start_url, form_hints, reporter/incident/vehicle fields,
+    description_de for the free-text field, and upload_files (JPEGs staged for the browser). Fill
+    the form with the Playwright browser tools (browser_navigate, browser_snapshot, browser_type,
+    browser_select_option, browser_click, browser_file_upload), submit it, then call
+    mark_web_submitted with the reference number shown on the confirmation page.
     """
     if not user_confirmed:
         raise ValueError("The user has not confirmed. Show the draft and ask before submitting.")
@@ -154,16 +166,17 @@ def submit_report(draft_id: str, user_confirmed: bool) -> str:
         draft = Draft.load(s, draft_id)
     except ReportError as exc:
         raise ValueError(str(exc)) from exc
-    if draft.status in ("sent", "handed_off"):
-        raise ValueError(f"Draft {draft_id} was already submitted ({draft.status}).")
+    if draft.status == "sent":
+        raise ValueError(f"Draft {draft_id} was already submitted.")
     missing = s.missing_reporter_fields()
     if missing:
-        raise ValueError(f"Configure {', '.join(missing)} in .env first; anonymous reports are not processed.")
+        raise ValueError(f"Configure {', '.join(missing)} first (berlin-reporter-secrets set, or .env); "
+                         "anonymous reports are not processed.")
 
     route = ROUTES[draft.route]
     if route.channel == "email":
         if not s.dry_run and s.missing_smtp_fields():
-            raise ValueError(f"Configure {', '.join(s.missing_smtp_fields())} in .env to send email.")
+            raise ValueError(f"Configure {', '.join(s.missing_smtp_fields())} to send email.")
         msg = build_message(draft, s, route.to)
         outcome = deliver(msg, s, draft.id)
         draft.status = "dry_run" if s.dry_run else "sent"
@@ -171,21 +184,42 @@ def submit_report(draft_id: str, user_confirmed: bool) -> str:
         append_history(s, draft, draft.status)
         return _json({"status": draft.status, "detail": outcome, "authority": route.authority})
 
-    draft.status = "handed_off"
+    payload = form_payload(draft, s)
+    draft.status = "form_pending"
     draft.save(s)
-    append_history(s, draft, "handed_off")
-    rendered = render(draft, s)
     return _json({
-        "status": "handed_off",
-        "detail": "This authority only takes reports through a web form. Give the user the link, "
-                  "the text to paste and the photo paths to upload.",
-        "authority": route.authority,
-        "urls": list(route.urls),
-        "notes": route.notes,
-        "subject": rendered["subject"],
-        "text": rendered["body"],
-        "photos": draft.photos,
+        "status": "form_pending",
+        "next": "Fill and submit the web form with the Playwright browser tools using this payload, "
+                "then call mark_web_submitted. If a field is required that the payload lacks, ask the "
+                "user. If a CAPTCHA appears, ask the user to solve it in the open browser window.",
+        **payload,
     })
+
+
+@mcp.tool()
+def mark_web_submitted(draft_id: str, reference: str | None = None, note: str | None = None) -> str:
+    """Record that a web-form report went through. Call only after the site showed a success/confirmation page.
+
+    Args:
+        reference: Vorgangsnummer / ticket number shown on the confirmation page, if any.
+        note: Anything worth remembering (e.g. "confirmation email promised").
+    """
+    s = load_settings()
+    try:
+        draft = Draft.load(s, draft_id)
+    except ReportError as exc:
+        raise ValueError(str(exc)) from exc
+    if ROUTES[draft.route].channel != "web_form":
+        raise ValueError("This draft is an email report; submit_report sends it.")
+    if draft.status == "sent":
+        raise ValueError(f"Draft {draft_id} is already recorded as submitted.")
+    draft.status = "sent"
+    draft.save(s)
+    append_history(s, draft, "sent", reference=reference, note=note)
+    upload_folder = s.upload_dir / draft.id
+    if upload_folder.is_dir():
+        shutil.rmtree(upload_folder)
+    return _json({"status": "sent", "reference": reference, "authority": ROUTES[draft.route].authority})
 
 
 @mcp.tool()

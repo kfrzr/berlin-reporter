@@ -1,4 +1,9 @@
-"""Settings, read from environment variables and an optional .env file."""
+"""Settings, read from environment variables, an optional .env file, and the OS keychain.
+
+Lookup order per key: real environment variable → .env file → OS keychain
+(macOS Keychain, Windows Credential Manager, Secret Service on Linux; service name
+"berlin-reporter"). Store personal data in the keychain with `berlin-reporter-secrets set`.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,23 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+KEYRING_SERVICE = "berlin-reporter"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Personal data and credentials that can live in the keychain instead of a file.
+SECRET_KEYS = (
+    "REPORTER_NAME",
+    "REPORTER_ADDRESS",
+    "REPORTER_EMAIL",
+    "REPORTER_PHONE",
+    "REPORTER_BIRTHDATE",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+)
+
 ENV_FILE_LOCATIONS = [
     Path.cwd() / ".env",
-    Path(__file__).resolve().parents[2] / ".env",
+    PROJECT_ROOT / ".env",
     Path.home() / ".config" / "berlin-reporter" / ".env",
 ]
 
@@ -30,12 +49,29 @@ def _load_env_file() -> None:
         return
 
 
+def keyring_get(key: str) -> str:
+    try:
+        import keyring
+
+        return keyring.get_password(KEYRING_SERVICE, key) or ""
+    except Exception:  # no keyring backend available (headless Linux, CI, ...)
+        return ""
+
+
+def _get(key: str, default: str = "") -> str:
+    value = os.environ.get(key, "")
+    if value == "" and key in SECRET_KEYS:
+        value = keyring_get(key)
+    return value if value != "" else default
+
+
 @dataclass(frozen=True)
 class Settings:
     reporter_name: str
     reporter_address: str
     reporter_email: str
     reporter_phone: str
+    reporter_birthdate: str
     smtp_host: str
     smtp_port: int
     smtp_user: str
@@ -43,6 +79,7 @@ class Settings:
     dry_run: bool
     geocode: bool
     reports_dir: Path
+    upload_dir: Path
 
     @property
     def inbox(self) -> Path:
@@ -86,19 +123,21 @@ def _flag(name: str, default: bool) -> bool:
 
 def load_settings() -> Settings:
     _load_env_file()
-    env = os.environ.get
     settings = Settings(
-        reporter_name=env("REPORTER_NAME", "").strip(),
-        reporter_address=env("REPORTER_ADDRESS", "").strip(),
-        reporter_email=env("REPORTER_EMAIL", "").strip(),
-        reporter_phone=env("REPORTER_PHONE", "").strip(),
-        smtp_host=env("SMTP_HOST", "").strip(),
-        smtp_port=int(env("SMTP_PORT", "587") or 587),
-        smtp_user=env("SMTP_USER", "").strip(),
-        smtp_password=env("SMTP_PASSWORD", ""),
+        reporter_name=_get("REPORTER_NAME").strip(),
+        reporter_address=_get("REPORTER_ADDRESS").strip(),
+        reporter_email=_get("REPORTER_EMAIL").strip(),
+        reporter_phone=_get("REPORTER_PHONE").strip(),
+        reporter_birthdate=_get("REPORTER_BIRTHDATE").strip(),
+        smtp_host=_get("SMTP_HOST").strip(),
+        smtp_port=int(_get("SMTP_PORT", "587")),
+        smtp_user=_get("SMTP_USER").strip(),
+        smtp_password=_get("SMTP_PASSWORD"),
         dry_run=_flag("DRY_RUN", True),
         geocode=_flag("GEOCODE", True),
-        reports_dir=Path(env("REPORTS_DIR", "~/berlin-reports")).expanduser(),
+        reports_dir=Path(_get("REPORTS_DIR", "~/berlin-reports")).expanduser(),
+        # Inside the project by default, so the browser MCP (limited to workspace roots) can upload from it.
+        upload_dir=Path(_get("UPLOAD_DIR", str(PROJECT_ROOT / ".uploads"))).expanduser(),
     )
     for d in (settings.inbox, settings.drafts, settings.outbox):
         d.mkdir(parents=True, exist_ok=True)

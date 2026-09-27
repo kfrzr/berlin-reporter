@@ -9,10 +9,12 @@ dependencies = [
     "pillow>=10",
     "pillow-heif>=0.16",
     "httpx>=0.27",
+    "keyring>=25",
 ]
 
 [project.scripts]
 berlin-reporter = "berlin_reporter.server:main"
+berlin-reporter-secrets = "berlin_reporter.secrets_cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

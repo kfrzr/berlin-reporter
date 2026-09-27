@@ -44,11 +44,36 @@ report.
 
 ## 5. Submit
 Only after an explicit yes, call `submit_report(draft_id, user_confirmed=true)`.
-- `sent` → confirm; they got a CC copy.
-- `dry_run` → tell them it was saved to the outbox, not sent, and how to switch it on
-  (`DRY_RUN=0` in `.env`).
-- `handed_off` (moving violations → Polizei Internetwache; rental scooters → operator form):
-  give the link, the text to paste, and which photo files to upload.
+- `sent`: confirm; they got a CC copy.
+- `dry_run`: tell them it was saved to the outbox, not sent, and how to switch it on
+  (`DRY_RUN=0`).
+- `form_pending` (moving violations → Polizei Internetwache; rental scooters → operator form):
+  submit the web form yourself, see below.
+
+## 6. Web forms (`form_pending`)
+Use the `playwright` MCP browser tools. The browser window is visible on the user's screen.
+1. `browser_navigate` to `start_url`, then `browser_snapshot` to read the page. Follow
+   `form_hints` but trust what the page actually says; labels change.
+2. Fill each field from the payload (`reporter`, `incident`, `vehicle`). Put `description_de`
+   in the free-text field (Sachverhalt/Beschreibung/Kommentar). To upload photos, first
+   `browser_click` the upload button/field (this opens a file chooser), then call
+   `browser_file_upload` with `upload_files`. Split or reformat values as the field requires (e.g. date formats).
+3. Choose options that match the facts. The user is a **witness**, not a victim. Tick
+   declarations that the information is truthful or that they are willing to testify; the
+   report already says both. Decline newsletters and optional marketing.
+4. **Stop and ask the user** if:
+   - the form requires something not in the payload (e.g. birth date). Suggest they store it
+     with `berlin-reporter-secrets set REPORTER_BIRTHDATE`;
+   - a choice doesn't clearly fit the facts, or a declaration goes beyond "truthful / willing to
+     testify";
+   - there is a **CAPTCHA**. Ask them to solve it in the browser window, then continue. Never
+     try to solve or bypass it.
+5. On the final review page, `browser_snapshot` and check plate, date, time and place against
+   the draft. If everything matches what the user already approved, click Absenden/Senden. If
+   anything differs, fix it or ask.
+6. On the confirmation page, read any Vorgangsnummer/reference and call
+   `mark_web_submitted(draft_id, reference)`. Tell the user it went through, with the reference.
+   If submission failed, say so plainly and don't call `mark_web_submitted`.
 
 ## Rules
 - Reports go out under the user's real name and they may be called as a witness. False

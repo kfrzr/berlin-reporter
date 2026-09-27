@@ -9,10 +9,11 @@ from dataclasses import dataclass
 class Route:
     key: str
     authority: str
-    channel: str  # "email" (sent by this server) or "web_form" (the user submits the prepared text)
+    channel: str  # "email" (sent by this server) or "web_form" (filled in a browser via the Playwright MCP)
     to: str | None = None
     urls: tuple[str, ...] = ()
     notes: str = ""
+    form_hints: str = ""
 
 
 BOWI = Route(
@@ -35,9 +36,16 @@ INTERNETWACHE = Route(
     notes=(
         "Violations in moving traffic (red light, phone at the wheel, riding on the "
         "sidewalk, dangerous overtaking, ...) are not handled by the fine office's email "
-        "inbox. Submit them through the police online station: choose "
-        "'Anzeige erstatten' → traffic offence, paste the prepared text and upload the "
-        "photos. Accidents, injuries or acute danger: call 110."
+        "inbox. They go through the police online station. Accidents, injuries or acute "
+        "danger: call 110."
+    ),
+    form_hints=(
+        "Multi-step wizard. Look for 'Anzeige erstatten' and then a category for traffic "
+        "offences (e.g. 'Verkehrsordnungswidrigkeit' / 'Verkehrsdelikt'); labels change over "
+        "time, so read the page. The reporter is a witness (Zeuge/Hinweisgeber), not a victim "
+        "(Geschädigter). Put description_de into the free-text 'Sachverhalt' field and upload "
+        "the upload_files as attachments. The final page usually summarises everything before "
+        "'Absenden'. Note any Vorgangsnummer/reference shown afterwards."
     ),
 )
 
@@ -55,6 +63,12 @@ SHARING_OPERATOR = Route(
         "If the vehicle blocks a sidewalk or crossing for people with wheelchairs, "
         "strollers or visual impairments, it can additionally be reported to the fine "
         "office as a parking violation (use the plate on the insurance sticker)."
+    ),
+    form_hints=(
+        "Pick the operator (from the logo/colour in the photo) and the problem type, set the "
+        "location (address or map pin at the incident coordinates), upload one photo, and use "
+        "description_de as the comment. The vehicle ID printed on the scooter/bike is more "
+        "useful to the operator than the insurance plate if it is legible."
     ),
 )
 
