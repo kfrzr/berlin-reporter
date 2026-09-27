@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "berlin-reporter": {
+      "command": "uv",
+      "args": ["run", "--directory", "${CLAUDE_PROJECT_DIR:-.}", "berlin-reporter"]
+    }
+  }
+}
